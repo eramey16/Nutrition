@@ -104,10 +104,10 @@ class MainSideBar(qtw.QFrame):
     dateChosen = qtc.pyqtSignal(date)
     recipes = []
     
-    def __init__(self):
+    def __init__(self, model):
         ''' Main Sidebar constructor '''
         super().__init__()
-#         self.model = model
+        self.model = model
         sidebar_layout = qtw.QVBoxLayout()
         self.setLayout(sidebar_layout)
         self.setSizePolicy(
@@ -145,7 +145,7 @@ class MainSideBar(qtw.QFrame):
         self.recipe_list.sizeHint = lambda: qtc.QSize(50, 50)
         sidebar_layout.addWidget(self.recipe_list)
         self.populate_recipe_list()
-        self.calendar.selectionChanged.connect(self.sendDate)
+        self.calendar.selectionChanged.connect(lambda: self.model.set_date(self.calendar.selectedDate()))
         
 #         self.calendar.selectionChanged.connect(lambda: self.model.set_date(self.calendar.selectedDate()))
 #         self.model.model_changed.connect(self.on_model_change)
@@ -158,9 +158,10 @@ class MainSideBar(qtw.QFrame):
 #         self.calendar.setSelectedDate(qdate)
     
     def sendDate(self):
-        qdate = self.calendar.selectedDate()
-        d = date(qdate.year(), qdate.month(), qdate.day())
-        self.dateChosen.emit(d)
+        self.model.set_date(self.calendar.selectedDate())
+#         qdate = self.calendar.selectedDate()
+#         d = date(qdate.year(), qdate.month(), qdate.day())
+#         self.dateChosen.emit(d)
     
     def sizeHint(self):
         return qtc.QSize(150, 150)
@@ -173,16 +174,14 @@ class MainSideBar(qtw.QFrame):
 
 class DayPanel(qtw.QFrame):
     
-    change_calendar = qtc.pyqtSignal(date)
-    
     children = []
-    def __init__(self, start_date=date.today(), scale=7):
+    def __init__(self, model, start_date=date.today(), scale=7):
         """ Main Panel constructor - contains list of days & meals """
         super().__init__()
         
         # Model
-#         self.model = model
-#         self.model.model_changed.connect(self.on_model_change)
+        self.model = model
+        self.model.model_changed.connect(self.populate_days)
         
         # Layout
         layout = qtw.QHBoxLayout()
@@ -203,9 +202,10 @@ class DayPanel(qtw.QFrame):
     
     def populate_days(self):
         self.clear_days()
-        for i in range(self.scale):
+        print(self.model.selected_scale)
+        for i in range(self.model.selected_scale):
             td=timedelta(days=i)
-            day_box = DayBox(self.start_date+td)
+            day_box = DayBox(self.model.selected_date+td)
             self.layout().addWidget(day_box, 1)
             self.children.append(day_box)
     
@@ -237,11 +237,11 @@ class MainTitleBar(qtw.QFrame):
     scale_change = qtc.pyqtSignal(int) # current day setting
     day_change = qtc.pyqtSignal(int)
     
-    def __init__(self):
+    def __init__(self, model):
         """ Constructs the top panel for the main window """
         super().__init__()
-#         self.model = model
-#         self.model.model_changed.connect(self.on_model_change)
+        self.model = model
+        self.model.model_changed.connect(self.on_model_change)
         
         self.setSizePolicy(
             qtw.QSizePolicy.Expanding,
@@ -280,18 +280,19 @@ class MainTitleBar(qtw.QFrame):
         
 #         left_btn.clicked.connect(self.model.decrement_date)
 #         right_btn.clicked.connect(self.model.increment_date)
-#         self.day_choice.currentIndexChanged.connect(lambda: self.model.set_scale(self.day_choice.currentData()))
+        self.day_choice.currentIndexChanged.connect(lambda: self.model.set_scale(self.day_choice.currentData()))
     
-    def set_title(self, cal_date):
+    def set_title(self):
         """ Sets the title based on the calendar date """
-        title = cal_date.strftime("%B %Y")
+        title = self.model.selected_date.strftime("%B %Y")
         self.page_title.setText(title)
         
     def sizeHint(self):
         return qtc.QSize(600, 50)
     
-#     def on_model_change(self):
-#         self.day_choice.setData(self.model.selected_scale)
+    def on_model_change(self):
+        pass
+        #self.day_choice.setData(self.model.selected_scale)
 #         title = self.model.selected_date.strftime("%B %Y")
 #         self.page_title.setText(title)
 
@@ -304,7 +305,7 @@ class MainWindow(qtw.QWidget):
         super().__init__()
         
         # Model
-#         self.model = DietModel()
+        model = DietModel()
         
         # Window setup
         self.setWindowTitle("My Calendar App")
@@ -313,19 +314,19 @@ class MainWindow(qtw.QWidget):
         main_layout = qtw.QHBoxLayout()
         self.setLayout(main_layout)
         # Sidebar
-        self.sidebar = MainSideBar()
+        self.sidebar = MainSideBar(model)
         main_layout.addWidget(self.sidebar)
         panel_layout = qtw.QVBoxLayout()
         main_layout.addLayout(panel_layout)
         # Title bar
-        self.main_title = MainTitleBar()
+        self.main_title = MainTitleBar(model)
         panel_layout.addWidget(self.main_title)
         
-        self.day_panel = DayPanel()
+        self.day_panel = DayPanel(model)
         panel_layout.addWidget(self.day_panel)
         
         # Connect date selection with date panel and title bar
-        self.sidebar.dateChosen.connect(self.day_panel.change_start)
+        #self.sidebar.dateChosen.connect(self.day_panel.change_start)
         self.sidebar.dateChosen.connect(self.main_title.set_title)
         self.sidebar.sendDate()
         
