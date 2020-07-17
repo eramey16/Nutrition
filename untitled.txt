@@ -1,0 +1,42 @@
+class DietModel(qtc.QAbstractItemModel):
+    
+    model_changed = qtc.pyqtSignal()
+    
+    def __init__(self):
+        """ Constructs a Diet Model """
+        super().__init__()
+        self.selected_date = date.today()
+        self.selected_scale = 7
+        self.week_start_visible = True
+        self.meal_plan = diet.MealPlan.from_file()
+        self.recipes = diet.read_recipes()
+    
+    def set_scale(self, new_scale):
+        print("model scale set:", new_scale)
+        self.week_start_visible = new_scale==7
+        self.selected_scale = new_scale
+        self.model_changed.emit()
+    
+    def set_date(self, new_date):
+        d = date(new_date.year(), new_date.month(), new_date.day())
+        print("model date set:", d)
+        self.selected_date = d
+        self.model_changed.emit()
+    
+    def increment_date(self):
+        td = timedelta(days = self.selected_scale)
+        self.selected_date += td
+        self.model_changed.emit()
+        
+    def decrement_date(self):
+        td = timedelta(days = -self.selected_scale)
+        self.selected_date += td
+        self.model_changed.emit()
+    
+    def add_meal(self, meal):
+        self.meal_plan.add_meal(meal)
+        self.model_changed.emit()
+    
+    def add_recipe(self, recipe):
+        self.recipes.append(recipe)
+        self.model_changed.emit()
