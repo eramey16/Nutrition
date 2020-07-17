@@ -1,8 +1,3 @@
-### diet_app.py - contains classes and methods for implementing the GUI for Mom's diet plan
-### Author: Emily Ramey
-### Date: 07/14/20
-
-# Preamble
 import sys
 import numpy as np
 from datetime import date, time, timedelta, datetime
@@ -10,8 +5,18 @@ from PyQt5 import QtWidgets as qtw, QtGui as qtg, QtCore as qtc
 import diet_planner as diet
 
 days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-mp = diet.MealPlan.from_file()
 
+### Helper Functions
+def clear_widget(widget, children):
+    """ Clears a widget of its children """
+    for child in children:
+        child.close() # Works for some reason
+        widget.layout().removeWidget(child)
+        child.destroy()
+    widget.children = []
+
+############################################### Diet Model ######################################################
+# Where all the data is stored
 class DietModel(qtc.QAbstractItemModel):
     
     model_changed = qtc.pyqtSignal()
@@ -19,237 +24,223 @@ class DietModel(qtc.QAbstractItemModel):
     def __init__(self):
         """ Constructs a Diet Model """
         super().__init__()
-        self.selected_date = date.today()
         self.selected_scale = 7
         self.week_start_visible = True
         self.meal_plan = diet.MealPlan.from_file()
         self.recipes = diet.read_recipes()
+        self.calendar = qtw.QCalendarWidget()
+        self.set_date(date.today())
+        
+        self.calendar.selectionChanged.connect(self.model_changed.emit)
     
     def set_scale(self, new_scale):
-        print("model scale set:", new_scale)
+        """ Sets the selected scale (#days) """
         self.week_start_visible = new_scale==7
         self.selected_scale = new_scale
         self.model_changed.emit()
     
     def set_date(self, new_date):
-        d = date(new_date.year(), new_date.month(), new_date.day())
-        print("model date set:", d)
-        self.selected_date = d
-        self.model_changed.emit()
+        """ Sets the selected date """
+        if type(new_date) is date:
+            new_date = qtc.QDate(new_date.year, new_date.month, new_date.day)
+        self.calendar.setSelectedDate(new_date)
+    
+    def get_date(self):
+        """ Returns the date on the calendar """
+        qd = self.calendar.selectedDate()
+        d = date(qd.year(), qd.month(), qd.day())
+        return d
     
     def increment_date(self):
+        """ Increments the date by the # of days in scale """
         td = timedelta(days = self.selected_scale)
-        self.selected_date += td
-        self.model_changed.emit()
+        self.set_date(self.get_date()+td)
         
     def decrement_date(self):
+        """ Decrements the date by the # of days in the scale """
         td = timedelta(days = -self.selected_scale)
-        self.selected_date += td
-        self.model_changed.emit()
+        self.set_date(self.get_date()+td)
     
     def add_meal(self, meal):
+        """ Adds a meal to the meal plan """
         self.meal_plan.add_meal(meal)
         self.model_changed.emit()
     
     def add_recipe(self, recipe):
+        """ Adds a recipe to the recipe list """
         self.recipes.append(recipe)
         self.model_changed.emit()
 
-class MealBox(qtw.QFrame):
+############################################## Sub-Widgets #####################################################
+
+### Meal Widget
+class MealBox(qtw.QPushButton):
     
     def __init__(self, meal=None, mini=False):
+        """ Constructs a meal box """
         super().__init__()
         self.setSizePolicy(
             qtw.QSizePolicy.MinimumExpanding,
             qtw.QSizePolicy.Maximum
         )
         self.mini = mini
-        self.setLayout(qtw.QHBoxLayout())
-        self.setFrameStyle(qtw.QFrame.StyledPanel)
+        self.meal = meal
         text = "None" if meal is None else meal.name
-        label = qtw.QLabel(text)
-        label.setAlignment(qtc.Qt.AlignHCenter)
-        self.layout().addWidget(label)
+        self.setText(text)
+        self.clicked.connect(self.on_recipe_click)
     
     def sizeHint(self):
-        return qtc.QSize(40, 15) if self.mini else qtc.QSize(100, 50)
+        return qtc.QSize(50, 50) if self.mini else qtc.QSize(100, 50)
+    
+    def on_recipe_click(self):
+        self.meal_window = MealWindow(self.meal)
+        self.meal_window.show()
 
+### Day Widget
 class DayBox(qtw.QGroupBox):
     
-    def __init__(self, box_date=date.today()):
-        ''' Constructor for a calendar day '''
+    def __init__(self, box_date, model):
+        ''' Constructor for a calendar day (holds meal data) '''
         day = box_date.weekday()
-        self.date = box_date
         super().__init__(f"{days[day]} {box_date.month}/{box_date.day}", alignment=qtc.Qt.AlignHCenter)
+        
+        self.box_date = box_date
+        self.model = model
+        
+        # Layout
+        self.layout = qtw.QVBoxLayout()
+        self.layout.setAlignment(qtc.Qt.AlignTop)
+        self.setLayout(self.layout)
         self.setSizePolicy(
             qtw.QSizePolicy.MinimumExpanding,
             qtw.QSizePolicy.MinimumExpanding
         )
-        day_layout = qtw.QVBoxLayout()
-        day_layout.setAlignment(qtc.Qt.AlignTop)
-        self.setLayout(day_layout)
+        
         self.populate_meals()
     
     def populate_meals(self):
-        meals = mp.get_meals(start=self.date, days=1)
+        """ Populates a day box with its meals """
+        meals = self.model.meal_plan.get_meals(start=self.box_date, days=1)
         for m in meals:
             meal_box = MealBox(meal=m)
-            self.layout().addWidget(meal_box)
+            self.layout.addWidget(meal_box)
     
     def sizeHint(self):
         return qtc.QSize(100, 100)
 
-class MainSideBar(qtw.QFrame):
-    
-    dateChosen = qtc.pyqtSignal(date)
-    recipes = []
-    
-    def __init__(self, model):
-        ''' Main Sidebar constructor '''
-        super().__init__()
-        self.model = model
-        sidebar_layout = qtw.QVBoxLayout()
-        self.setLayout(sidebar_layout)
-        self.setSizePolicy(
-            qtw.QSizePolicy.Maximum,
-            qtw.QSizePolicy.Expanding
-        )
-        
-        ### Calendar Widget
-        # Just accept that this won't resize, k?
-        self.calendar = qtw.QCalendarWidget()
-        self.calendar.setSizePolicy(
-            qtw.QSizePolicy.Expanding,
-            qtw.QSizePolicy.Fixed
-        )
-        self.calendar.sizeHint = lambda: qtc.QSize(50, 50)
-        sidebar_layout.addWidget(self.calendar)
-        
-        ### Recipe List Label
-        recipe_label = qtw.QLabel("Your recipes:")
-        recipe_label.setAlignment(qtc.Qt.AlignHCenter)
-        recipe_label.setSizePolicy(
-            qtw.QSizePolicy.Expanding,
-            qtw.QSizePolicy.Fixed
-        )
-        sidebar_layout.addWidget(recipe_label)
-        
-        ### Recipe List
-        self.recipe_list = qtw.QFrame()
-        self.recipe_list.setSizePolicy(
-            qtw.QSizePolicy.Expanding,
-            qtw.QSizePolicy.MinimumExpanding
-        )
-        self.recipe_list.setLayout(qtw.QVBoxLayout())
-        self.recipe_list.layout().setAlignment(qtc.Qt.AlignTop)
-        self.recipe_list.sizeHint = lambda: qtc.QSize(50, 50)
-        sidebar_layout.addWidget(self.recipe_list)
-        self.populate_recipe_list()
-        self.calendar.selectionChanged.connect(lambda: self.model.set_date(self.calendar.selectedDate()))
-        
-#         self.calendar.selectionChanged.connect(lambda: self.model.set_date(self.calendar.selectedDate()))
-#         self.model.model_changed.connect(self.on_model_change)
-#         self.on_model_change()
-    
-#     def on_model_change(self):
-#         """ Changes sidebar view to match model """
-#         d = self.model.selected_date
-#         qdate = qtc.QDate(d.year, d.month, d.day)
-#         self.calendar.setSelectedDate(qdate)
-    
-    def sendDate(self):
-        self.model.set_date(self.calendar.selectedDate())
-#         qdate = self.calendar.selectedDate()
-#         d = date(qdate.year(), qdate.month(), qdate.day())
-#         self.dateChosen.emit(d)
-    
-    def sizeHint(self):
-        return qtc.QSize(150, 150)
-    
-    def populate_recipe_list(self):
-        recipes = diet.read_recipes()
-        for recipe in recipes:
-            rWidget = MealBox(meal=recipe, mini=True)
-            self.recipe_list.layout().addWidget(rWidget)
+########################################### Main Panels #######################################################
 
-class DayPanel(qtw.QFrame):
+meal_entries = {"Title": qtw.QLineEdit, "Foods": qtw.QTextEdit}
+
+class MealWindow(qtw.QWidget):
+    
+    entries = {}
+    
+    def __init__(self, meal=None):
+        super().__init__(None, modal=False)
+        name = "New Meal" if meal is None else meal.name
+        self.setWindowTitle(name)
+        self.meal = meal
+        
+        # Layout
+        self.setLayout(qtw.QVBoxLayout())
+        self.form_layout = qtw.QFormLayout()
+        self.btn_layout = qtw.QHBoxLayout()
+        self.layout().addLayout(self.form_layout)
+        self.layout().addLayout(self.btn_layout)
+        
+        # Form
+        self.add_entries()
+        
+        # Buttons
+        self.save_btn = qtw.QPushButton(
+            'Save',
+            clicked=self.close
+        )
+        self.cancel_btn = qtw.QPushButton(
+            'Cancel',
+            clicked=self.close
+        )
+        self.btn_layout.addWidget(self.save_btn)
+        self.btn_layout.addWidget(self.cancel_btn)
+    
+    def add_entries(self):
+        for label in meal_entries:
+            widget = meal_entries[label]()
+            self.form_layout.addRow(label, widget)
+            self.entries[label] = widget
+            widget.setReadOnly(True)
+            print(getattr(self.meal, label.lower()))
+
+### Panel that holds days
+class MainDayPanel(qtw.QFrame):
     
     children = []
-    def __init__(self, model, start_date=date.today(), scale=7):
-        """ Main Panel constructor - contains list of days & meals """
+    
+    def __init__(self, model):
+        """ Initializes the Main Day Panel (holds all day boxes) """
         super().__init__()
         
         # Model
         self.model = model
-        self.model.model_changed.connect(self.populate_days)
+        self.model.model_changed.connect(self.read_model)
         
         # Layout
-        layout = qtw.QHBoxLayout()
-        layout.setAlignment(qtc.Qt.AlignHCenter)
-        self.start_date = start_date
-        self.scale=scale
-        self.setLayout(layout)
-#         self.on_model_change()
-        self.populate_days()
+        self.layout = qtw.QHBoxLayout()
+        self.layout.setAlignment(qtc.Qt.AlignHCenter)
+        self.setLayout(self.layout)
+        self.setSizePolicy(
+            qtw.QSizePolicy.MinimumExpanding,
+            qtw.QSizePolicy.MinimumExpanding
+        )
         
-    
+        self.read_model()
+        
     def clear_days(self):
         """ Clears all child widgets from main panel """
         for child in self.children:
             child.close() # Works for some reason
-            self.layout().removeWidget(child)
+            self.layout.removeWidget(child)
+            child.destroy()
         self.children = []
     
     def populate_days(self):
+        """ Populates all days in the main day panel """
         self.clear_days()
-        print(self.model.selected_scale)
+        # Check for week view
+        start = self.model.get_date()
+        if self.model.week_start_visible:
+            start = diet.find_week_start(start)
+        # Add days
         for i in range(self.model.selected_scale):
             td=timedelta(days=i)
-            day_box = DayBox(self.model.selected_date+td)
-            self.layout().addWidget(day_box, 1)
+            day_box = DayBox(start+td, self.model)
+            self.layout.addWidget(day_box, 1)
             self.children.append(day_box)
     
-    def change_start(self, new_start):
-        if type(new_start) is int:
-            td = timedelta(days=new_start)
-            self.start_date+=td
-        else:
-            self.start_date = new_start
-        if self.scale==7:
-            self.start_date = diet.find_week_start(self.start_date)
+    def read_model(self):
+        """ Reads model data and updates widget """
         self.populate_days()
-    
-    def change_scale(self, new_scale):
-        self.scale = new_scale
-        if new_scale==7:
-            self.start_date = diet.find_week_start(self.start_date)
-        self.populate_days()
-    
-#     def on_model_change(self):
-#         start = self.model.selected_date
-#         if self.model.week_start_visible:
-#             start = diet.find_week_start(start)
-#         print(start, self.model.selected_scale)
-#         self.populate_days(start, self.model.selected_scale)
 
+### Main title bar
 class MainTitleBar(qtw.QFrame):
     
-    scale_change = qtc.pyqtSignal(int) # current day setting
-    day_change = qtc.pyqtSignal(int)
-    
     def __init__(self, model):
-        """ Constructs the top panel for the main window """
+        """ Initializes the Main Title Bar """
         super().__init__()
-        self.model = model
-        self.model.model_changed.connect(self.on_model_change)
         
+        # Model
+        self.model = model
+        self.model.model_changed.connect(self.read_model)
+        
+        # Layout
+        self.layout = qtw.QHBoxLayout()
+        self.layout.setAlignment(qtc.Qt.AlignHCenter)
+        self.setLayout(self.layout)
         self.setSizePolicy(
             qtw.QSizePolicy.Expanding,
             qtw.QSizePolicy.Fixed
         )
-        center_layout = qtw.QHBoxLayout()
-        center_layout.setAlignment(qtc.Qt.AlignHCenter)
-        self.setLayout(center_layout)
         
         # Title and left/right buttons
         self.page_title = qtw.QLabel("")
@@ -258,87 +249,145 @@ class MainTitleBar(qtw.QFrame):
         right_btn = qtw.QPushButton()
         right_btn.setIcon(self.style().standardIcon(getattr(qtw.QStyle, "SP_ArrowForward")))
         
-        # Choice of # days to view
-        self.day_choice = qtw.QComboBox()
-        self.day_choice.addItem("1 day", 1)
-        self.day_choice.addItem("4 days", 4)
-        self.day_choice.addItem("7 days", 7)
-        self.day_choice.setCurrentIndex(2)
+        # Combo Box
+        scale_choice = qtw.QComboBox()
+        scale_choice.addItem("day", 1)
+        scale_choice.addItem("4 days", 4)
+        scale_choice.addItem("week", 7)
+        scale_choice.setCurrentIndex(2)
         
-        # Layout
-        center_layout.addWidget(left_btn)
-        center_layout.addWidget(self.page_title)
-        center_layout.addWidget(right_btn)
-        center_layout.addWidget(self.day_choice)
+        # Add to Layout
+        self.layout.addWidget(left_btn)
+        self.layout.addWidget(self.page_title)
+        self.layout.addWidget(right_btn)
+        self.layout.addWidget(scale_choice)
         
-#         self.on_model_change()
+        # Connect to model
+        left_btn.clicked.connect(self.model.decrement_date)
+        right_btn.clicked.connect(self.model.increment_date)
+        scale_choice.currentIndexChanged.connect(lambda: self.model.set_scale(scale_choice.currentData()))
         
-        # Connect widget signals to class signals
-        left_btn.clicked.connect(lambda: self.day_change.emit(-self.day_choice.currentData()))
-        right_btn.clicked.connect(lambda: self.day_change.emit(self.day_choice.currentData()))
-        self.day_choice.currentIndexChanged.connect(lambda: self.scale_change.emit(self.day_choice.currentData()))
-        
-#         left_btn.clicked.connect(self.model.decrement_date)
-#         right_btn.clicked.connect(self.model.increment_date)
-        self.day_choice.currentIndexChanged.connect(lambda: self.model.set_scale(self.day_choice.currentData()))
+        self.read_model()
     
-    def set_title(self):
-        """ Sets the title based on the calendar date """
-        title = self.model.selected_date.strftime("%B %Y")
-        self.page_title.setText(title)
-        
     def sizeHint(self):
         return qtc.QSize(600, 50)
+        
+    def set_title(self, text):
+        """ Sets the title based on the calendar date """
+        self.page_title.setText(text)
     
-    def on_model_change(self):
-        pass
-        #self.day_choice.setData(self.model.selected_scale)
-#         title = self.model.selected_date.strftime("%B %Y")
-#         self.page_title.setText(title)
+    def read_model(self):
+        """ Reads model data and updates widget """
+        title = self.model.get_date().strftime("%B %Y")
+        self.set_title(title)
 
+### Main Side Bar
+class MainSideBar(qtw.QFrame):
+    
+    recipe_widgets = []
+    
+    def __init__(self, model):
+        """ Constructor for the Main Side Bar """
+        super().__init__()
+        
+        # Model
+        self.model = model
+        self.model.model_changed.connect(self.read_model)
+        
+        # Layout
+        self.layout = qtw.QVBoxLayout()
+        self.layout.setAlignment(qtc.Qt.AlignHCenter)
+        self.setLayout(self.layout)
+        self.setSizePolicy(
+            qtw.QSizePolicy.Maximum,
+            qtw.QSizePolicy.Expanding
+        )
+        
+        # Calendar
+        self.calendar = self.model.calendar
+        self.calendar.setSizePolicy(
+            qtw.QSizePolicy.Expanding,
+            qtw.QSizePolicy.Fixed
+        )
+        self.calendar.sizeHint = lambda: qtc.QSize(50, 50)
+        self.layout.addWidget(self.calendar)
+        
+        # Label
+        recipe_label = qtw.QLabel("Your recipes:")
+        recipe_label.setAlignment(qtc.Qt.AlignHCenter)
+        recipe_label.setSizePolicy(
+            qtw.QSizePolicy.Expanding,
+            qtw.QSizePolicy.Fixed
+        )
+        self.layout.addWidget(recipe_label)
+        
+        # Recipe List
+        self.recipe_list = qtw.QFrame()
+        self.recipe_list.setFrameStyle(qtw.QFrame.StyledPanel)
+        self.recipe_list.setSizePolicy(
+            qtw.QSizePolicy.Expanding,
+            qtw.QSizePolicy.MinimumExpanding
+        )
+        self.recipe_list.setLayout(qtw.QVBoxLayout())
+        self.recipe_list.layout().setAlignment(qtc.Qt.AlignTop)
+        self.recipe_list.sizeHint = lambda: qtc.QSize(50, 50)
+        self.layout.addWidget(self.recipe_list)
+        self.populate_recipe_list()
+        
+        # Add Button
+        self.add_btn = qtw.QPushButton('Add')
+        self.layout.addWidget(self.add_btn)
+        
+        self.read_model()
+    
+    def sizeHint(self):
+        return qtc.QSize(150, 150)
+    
+    def populate_recipe_list(self):
+        """ Populates the sidebar recipe list """
+        clear_widget(self.recipe_list, self.recipe_widgets)
+        for recipe in self.model.recipes:
+            recipe_widget = MealBox(meal=recipe, mini=True)
+            self.recipe_list.layout().addWidget(recipe_widget)
+            self.recipe_widgets.append(recipe_widget)
+    
+    def read_model(self):
+        """ Reads model and updates widget """
+        self.populate_recipe_list()
 
-# Main Window object
+### Main Window
 class MainWindow(qtw.QWidget):
     
     def __init__(self):
         ''' Main Window constructor '''
         super().__init__()
         
-        # Model
-        model = DietModel()
-        
         # Window setup
         self.setWindowTitle("My Calendar App")
         self.resize(1600, 800)
+        
         # Layout
         main_layout = qtw.QHBoxLayout()
         self.setLayout(main_layout)
-        # Sidebar
-        self.sidebar = MainSideBar(model)
-        main_layout.addWidget(self.sidebar)
         panel_layout = qtw.QVBoxLayout()
+        
+        # Model
+        self.model = DietModel()
+        
+        # Sidebar
+        self.sidebar = MainSideBar(self.model)
+        main_layout.addWidget(self.sidebar)
+        
+        # Title Bar
         main_layout.addLayout(panel_layout)
-        # Title bar
-        self.main_title = MainTitleBar(model)
+        self.main_title = MainTitleBar(self.model)
         panel_layout.addWidget(self.main_title)
         
-        self.day_panel = DayPanel(model)
-        panel_layout.addWidget(self.day_panel)
-        
-        # Connect date selection with date panel and title bar
-        #self.sidebar.dateChosen.connect(self.day_panel.change_start)
-        self.sidebar.dateChosen.connect(self.main_title.set_title)
-        self.sidebar.sendDate()
-        
-        # Connect top panel with date panel
-        self.main_title.scale_change.connect(self.day_panel.change_scale)
-        self.main_title.day_change.connect(self.update_cal)
-        
-    def update_cal(self, days):
-        qdate = self.sidebar.calendar.selectedDate()
-        self.sidebar.calendar.setSelectedDate(qdate.addDays(days))
+        # Main Day Panel
+        self.main_panel = MainDayPanel(self.model)
+        panel_layout.addWidget(self.main_panel)
 
-### Start program
+############################################## Start Program ##############################################
 if __name__ == '__main__':
     # Start application wity system arguments
     app = qtw.QApplication(sys.argv)
@@ -346,5 +395,5 @@ if __name__ == '__main__':
     mw.show()
     # Exit with app code upon closing the window
     code = app.exec()
-    mp.to_file()
+    mw.model.meal_plan.to_file()
     sys.exit(code)
