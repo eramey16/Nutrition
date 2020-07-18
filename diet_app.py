@@ -61,15 +61,17 @@ class DietModel(qtc.QAbstractItemModel):
         td = timedelta(days = -self.selected_scale)
         self.set_date(self.get_date()+td)
     
-    def add_meal(self, meal):
+    def update_meal(self, new_meal, old_meal):
         """ Adds a meal to the meal plan """
-        self.meal_plan.add_meal(meal)
-        self.model_changed.emit()
+        print(new_meal, old_meal)
+#         self.meal_plan.add_meal(meal)
+#         self.model_changed.emit()
     
-    def add_recipe(self, recipe):
+    def add_meal(self, meal):
         """ Adds a recipe to the recipe list """
-        self.recipes.append(recipe)
-        self.model_changed.emit()
+        print(meal)
+#         self.recipes.append(recipe)
+#         self.model_changed.emit()
 
 ############################################## Sub-Widgets #####################################################
 
@@ -87,13 +89,13 @@ class MealBox(qtw.QPushButton):
         self.meal = meal
         text = "None" if meal is None else meal.name
         self.setText(text)
-        self.clicked.connect(self.on_recipe_click)
+        self.pressed.connect(self.on_recipe_click)
     
     def sizeHint(self):
         return qtc.QSize(50, 50) if self.mini else qtc.QSize(100, 50)
     
     def on_recipe_click(self):
-        self.meal_window = MealWindow(self.meal)
+        self.meal_window = MealWindow(meal=self.meal, date=not self.mini)
         self.meal_window.show()
 
 ### Day Widget
@@ -128,58 +130,127 @@ class DayBox(qtw.QGroupBox):
     def sizeHint(self):
         return qtc.QSize(100, 100)
 
-########################################### Main Panels #######################################################
+########################################### Meal Edit Panel #######################################################
 
-meal_entries = {"Title": qtw.QLineEdit, "Foods": qtw.QTextEdit}
+meal_entries = {"Name": qtw.QLineEdit, "Date": qtw.QLineEdit, "Category": qtw.QLineEdit, "Feeds": qtw.QLineEdit,
+                "Foods": qtw.QTextEdit, "Instructions": qtw.QTextEdit}
 
 class MealWindow(qtw.QWidget):
     
-    entries = {}
-    
-    def __init__(self, meal=None):
+    def __init__(self, meal=None, date=True):
         super().__init__(None, modal=False)
-        name = "New Meal" if meal is None else meal.name
-        self.setWindowTitle(name)
+        title = "New Meal" if meal is None else meal.name
+        
+        # Initialize
+        self.entries = {}
+        self.buttons = []
         self.meal = meal
+        self.editable = meal is None
+        self.date = date
         
         # Layout
+        self.setWindowTitle(title)
         self.setLayout(qtw.QVBoxLayout())
         self.form_layout = qtw.QFormLayout()
-        self.btn_layout = qtw.QHBoxLayout()
+        self.btn_frame = qtw.QFrame()
+        self.btn_frame.setSizePolicy(
+            qtw.QSizePolicy.Expanding,
+            qtw.QSizePolicy.Maximum
+        )
+        self.btn_frame.setLayout(qtw.QHBoxLayout())
+        self.btn_frame.layout().setAlignment(qtc.Qt.AlignRight)
         self.layout().addLayout(self.form_layout)
-        self.layout().addLayout(self.btn_layout)
+        self.layout().addWidget(self.btn_frame)
         
         # Form
-        self.add_entries()
-        
-        # Buttons
-        self.save_btn = qtw.QPushButton(
-            'Save',
-            clicked=self.close
-        )
-        self.cancel_btn = qtw.QPushButton(
-            'Cancel',
-            clicked=self.close
-        )
-        self.btn_layout.addWidget(self.save_btn)
-        self.btn_layout.addWidget(self.cancel_btn)
-    
-    def add_entries(self):
         for label in meal_entries:
-            widget = meal_entries[label]()
-            self.form_layout.addRow(label, widget)
-            self.entries[label] = widget
-            widget.setReadOnly(True)
-            print(getattr(self.meal, label.lower()))
+            self.add_entry(label)
+        
+        self.set_entries()
+        self.populate_btns()
+    
+    def add_entry(self, label):
+        """ Adds a row to the form """
+        if not self.date and label=="Date":
+            return
+        widget = meal_entries[label]()
+        self.entries[label] = widget
+        self.form_layout.addRow(label+":", widget)
+        
+        if self.meal is None:
+            return
+        
+        # Set current text
+        setting = getattr(self.meal, label.lower())
+        if label=='Foods':
+            text = ""
+            for food_name in setting:
+                text += f"{food_name} {setting[food_name]}\n"
+        else: text = str(setting)
+        if text=='nan': text = ""
+        widget.setText(text)
+    
+    def make_btn(self, text, clicked):
+        """ Makes a new button based on inputs """
+        btn = qtw.QPushButton(
+            text,
+            pressed=clicked
+        )
+        btn.setSizePolicy(
+            qtw.QSizePolicy.Fixed,
+            qtw.QSizePolicy.Fixed
+        )
+        self.btn_frame.layout().addWidget(btn)
+        self.buttons.append(btn)
+    
+    def set_entries(self):
+        for label in self.entries:
+            widget = self.entries[label]
+            if self.editable: # Enable editing
+                widget.setReadOnly(False)
+                if type(widget) is qtw.QTextEdit: # TextEdits are stupid
+                    widget.viewport().setCursor(qtc.Qt.IBeamCursor)
+            else: # Set read-only
+                widget.setReadOnly(True)
+                if type(widget) is qtw.QTextEdit:
+                    widget.viewport().setCursor(qtc.Qt.ArrowCursor)
+    
+    def populate_btns(self):
+        """ Clears and repopulates buttons """
+        clear_widget(self.btn_frame, self.buttons)
+        if not self.editable:
+            self.make_btn('Edit', self.edit_clicked)
+        else:
+            self.make_btn('Save', self.save_clicked)
+            self.make_btn('Cancel', self.close)
+    
+    def edit_clicked(self):
+        """ Refreshes the buttons when edit is clicked """
+        self.editable = True
+        self.set_entries()
+        self.populate_btns()
+    
+    def save_clicked(self):
+        """ Sends information to the model """
+        
+        fields = {}
+        for label,widget in self.entries.items():
+            if type(widget) is qtw.QTextEdit:
+                text = widget.toPlainText()
+            elif type(widget) is qtw.QLineEdit:
+                text = widget.text()
+            fields[label] = text
+        
+        print(fields)
 
+############################################## Main Window Panels ##############################################
 ### Panel that holds days
 class MainDayPanel(qtw.QFrame):
-    
-    children = []
     
     def __init__(self, model):
         """ Initializes the Main Day Panel (holds all day boxes) """
         super().__init__()
+        self.children = []
         
         # Model
         self.model = model
@@ -263,8 +334,8 @@ class MainTitleBar(qtw.QFrame):
         self.layout.addWidget(scale_choice)
         
         # Connect to model
-        left_btn.clicked.connect(self.model.decrement_date)
-        right_btn.clicked.connect(self.model.increment_date)
+        left_btn.pressed.connect(self.model.decrement_date)
+        right_btn.pressed.connect(self.model.increment_date)
         scale_choice.currentIndexChanged.connect(lambda: self.model.set_scale(scale_choice.currentData()))
         
         self.read_model()
@@ -284,11 +355,11 @@ class MainTitleBar(qtw.QFrame):
 ### Main Side Bar
 class MainSideBar(qtw.QFrame):
     
-    recipe_widgets = []
-    
     def __init__(self, model):
         """ Constructor for the Main Side Bar """
         super().__init__()
+        
+        self.recipe_widgets = []
         
         # Model
         self.model = model
@@ -335,13 +406,27 @@ class MainSideBar(qtw.QFrame):
         self.populate_recipe_list()
         
         # Add Button
-        self.add_btn = qtw.QPushButton('Add')
-        self.layout.addWidget(self.add_btn)
+        btn_layout = qtw.QHBoxLayout()
+        btn_layout.setAlignment(qtc.Qt.AlignRight)
+        self.layout.addLayout(btn_layout)
+        self.add_btn = qtw.QPushButton(
+            'Add',
+            pressed=self.add_window
+        )
+        self.add_btn.setSizePolicy(
+            qtw.QSizePolicy.Fixed,
+            qtw.QSizePolicy.Fixed
+        )
+        btn_layout.addWidget(self.add_btn)
         
         self.read_model()
     
     def sizeHint(self):
         return qtc.QSize(150, 150)
+    
+    def add_window(self):
+        self.add_window = MealWindow(date=False)
+        self.add_window.show()
     
     def populate_recipe_list(self):
         """ Populates the sidebar recipe list """
