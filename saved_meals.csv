@@ -1,9 +1,5 @@
-file,date,category,instructions,feeds
-test_recipe_1.csv,2020-07-17,any,,4
-test_recipe.csv,2020-07-18,any,,4
-test_recipe_2.csv,2020-07-19,any,,4
-test_recipe.csv,2020-07-21,any,,4
-test_recipe.csv,,any,,4
-test_recipe_3.csv,,any,,4
-test_recipe_2.csv,,any,,4
-test_recipe_1.csv,,any,,4
+filename,date,category
+test_recipe_3.dat,2020-07-20,lunch
+test_recipe_3.dat,2020-07-23,breakfast
+test_recipe_3.dat,2020-07-22,snack
+test_recipe_2.dat,2020-07-21,breakfast

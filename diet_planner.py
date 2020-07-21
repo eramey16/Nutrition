@@ -107,10 +107,6 @@ class Meal:
             equal = self.date==other.date
         if not equal: return False
         if self.name != other.name: return False
-#         if self.category!=other.category: return False
-#         if self.foods!=other.foods: return False
-#         if self.feeds!=other.feeds: return False
-#         if self.instructions!=other.instructions: return False
         
         return True
     

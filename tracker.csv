@@ -1,16 +1,11 @@
-allowed,banned,restricted
-artichoke,dairy,eggplant
-asparagus,dried fruit,pepper
-beet,brazil nuts,tomato
-broccoli,hazelnuts,white potato
-brussels sprouts,macadamia nuts,avocado
-broccoli,peanuts,beef
-cabbage,pistachios,chicken
-carrot,milk,egg
-,,pork
-,,turkey
-,,apple
-,,apricot
-,,berries
-,,cantaloupe
-,,cherry
+allowed,restricted,banned
+artichoke,eggplant,butter
+asparagus,peppers,cheese
+beets,tomato,ice cream
+broccoli,white potato,milk
+brussels sprouts,avocado,sour cream
+cabbage,grapefruit,yogurt
+carrots,grapes,brazil nuts
+cauliflower,,hazelnuts
+celery,,macadamia nuts
+chard,,
