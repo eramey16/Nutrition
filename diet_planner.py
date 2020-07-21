@@ -1,3 +1,5 @@
+### diet_planner.py - Contains methods and functions for mom's diet app
+
 import numpy as np
 import pandas as pd
 from datetime import date, time, timedelta, datetime
@@ -5,13 +7,33 @@ import pint
 import sys
 import os
 import glob
+import io
+import re
 
-categories = ['dairy', 'processed', 'grain', 'fruit']
-meal_types = ['breakfast', 'lunch', 'dinner', 'snack', 'any']
-recipe_columns = ['Quantity', 'Units', 'Food']
-food_file = 'tracker.csv'
-meal_dir = 'Recipes/'
-meal_plan = 'saved_meals.csv'
+food_categories = ['dairy', 'processed', 'grain', 'fruit']
+meal_categories = ['breakfast', 'lunch', 'dinner', 'snack']
+ingredient_columns = ['quantity', 'units', 'food']
+meal_columns = ['filename', 'date', 'category']
+diet_columns = ['allowed', 'restricted', 'banned']
+recipe_labels = {
+    'name': 'Name: ',
+    'servings': '\n\nServings: ',
+    'ingredients': '\n\nIngredients:\n',
+    'instructions': '\n\nInstructions:\n'
+                }
+defaults = {
+    'name': "",
+    'servings': 0,
+    'ingredients': {},
+    'instructions': "",
+    'date': date.today(),
+    'category': 'snack'
+}
+
+saved_diet = 'tracker.csv'
+saved_recipes = 'Recipes/'
+saved_meals = 'saved_meals.csv'
+
 units = pint.UnitRegistry()
 
 # Add context to convert volume to weight/mass and vice versa
@@ -26,10 +48,50 @@ units.enable_contexts('kitchen')
 
 measure_unit = units.g
 
-# Global variable
-meal_id = 0
+def dict_to_pandas(foods):
+    """ Converts a food:amount dictionary to a pandas dataframe """
+    data = [[value.magnitude, value.units, key] for key, value in foods.items()]
+    df = pd.DataFrame(data, columns=ingredient_columns)
+    return df
 
-### Helper functions
+def calc_foods(meals):
+    """ Sum of food amounts for list of meals """
+    foods = {}
+    for meal in meals:
+        # Add up foods
+        for food_name in meal.ingredients:
+            if food_name in foods:
+                u = foods[food_name].units
+                foods[food_name] += meal.ingredients[food_name].to(u)
+            else:
+                foods[food_name] = meal.ingredients[food_name]
+    
+    return foods
+
+def check_foods(foods, diet):
+    """
+    Checks the dictionary of foods passed in for diet compliance
+    Returns whether the food is diet compliant, followed by the percentage of restricted foods
+    """
+    restricted_tally = 0 * measure_unit # common units
+    other_tally = 0 * measure_unit
+    allowed = True
+    for food_name in foods:
+        if food_name in diet['banned']:
+            allowed = False
+            restricted_tally += foods[food_name].to(measure_unit)
+        elif food_name in diet['restricted']:
+            restricted_tally += foods[food_name].to(measure_unit) # add amt to counter
+        else: # for now, just assume everything not listed is fine
+            other_tally += foods[food_name].to(measure_unit)
+
+    # No restricted foods
+    if restricted_tally == 0:
+        return allowed, 0
+
+    restricted_amt = (restricted_tally/(restricted_tally+other_tally)).magnitude
+    return restricted_amt <= 0.2, restricted_amt
+
 def find_week_start(d=date.today(), week='this'):
     ''' Finds the first day of the given week as a date object '''
     if week=='this':
@@ -41,143 +103,9 @@ def find_week_start(d=date.today(), week='this'):
     else:
         raise ValueError("Invalid week string")
 
-def filter_meals(meals, start=find_week_start(), days=7):
-    ''' Finds meals between start and start+days '''
-    td = timedelta(days=days)
-    valid_meals = np.array(meals)
-    valid_meals = valid_meals[valid_meals>=Meal(m_date=start)]
-    valid_meals = valid_meals[valid_meals<Meal(m_date=start+td)]
-    return list(valid_meals)
-
-def read_recipes(meal_dir=meal_dir):
-    """ Reads all recipes from a directory and returns a list of Meal objects  """
-    meals = []
-    for file in glob.glob(meal_dir+"*.csv"):
-        filename = os.path.basename(file)
-        meals.append(Meal.from_file(filename))
-    return meals
-
-def calc_foods(meals):
-    """ 
-    Sum of food amounts for the week
-    start = a datetime.date object
-    days = the number of days after start to count towards the food list
-    """
-    
-    for meal in meals:
-        # Check if it's a 'this week' meal if specified
-        #cond = True if not max_incl else meal.date != date.max
-        # If it's out of bounds, don't add it
-        # Add up foods
-        foods = {}
-        for food_name in meal.foods:
-            if food_name in foods:
-                u = foods[food_name].units
-                foods[food_name] += meal.foods[food_name].to(u)
-            else:
-                foods[food_name] = meal.foods[food_name]
-    return foods
-
-### Meal class
-class Meal:
-    def __init__(self, name="New Recipe", foods={}, m_date=None, category='any', instructions="", feeds=4):
-        """ Initializes the Meal class """
-        self.name = name
-        self.foods = foods
-        self.date = m_date
-        self.category = category
-        self.instructions = instructions
-        self.feeds = feeds
-        # Diet compliance
-        self.percent = 0
-        self.allowed = True
-    
-    def __str__(self):
-        return f"Recipe: {self.name}" if self.date is None else f"{self.name}: {self.date}"
-    
-    def __repr__(self):
-        return str(self)
-    
-    def __eq__(self, other):
-        # Check dates
-        equal = False
-        if self.date is None:
-            equal = True if other.date is None else False
-        else:
-            equal = self.date==other.date
-        if not equal: return False
-        if self.name != other.name: return False
-        
-        return True
-    
-    def __le__(self, other):
-        if self.date is None:
-            return False
-        if other.date is None:
-            return True
-        return self.date <= other.date
-    
-    def __lt__(self, other):
-        if self.date is None:
-            return False
-        if other.date is None:
-            return True
-        return self.date < other.date
-    
-    def __hash__(self):
-        return len(self.name) % 31 + len(self.foods) % 31
-    
-    def copy(self):
-        return Meal(name=self.name, foods=self.foods, m_date=self.date, category=self.category,
-                    instructions=self.instructions, feeds=self.feeds)
-        
-    def add_foods(self, foods):
-        ''' Adds foods and amounts to recipe list '''
-        self.foods.update(foods)
-    
-    def remove_foods(self, foods):
-        ''' Removes foods from recipe list '''
-        for food_name in foods:
-            self.foods.pop(food_name, None)
-    
-    def filename(self):
-        name = self.name.replace(" ", "_").lower()+".csv"
-        return meal_dir+name
-    
-    def to_file(self, meal_dir=meal_dir):
-        """ Saves a Meal object to a csv file """
-        filename = self.filename()
-        name = os.path.basename(filename)
-        if not self.date is None:
-            return name
-        food_names = list(self.foods.keys())
-        food_amounts = [x.magnitude for x in self.foods.values()]
-        food_units = [str(x.units) for x in self.foods.values()]
-        df = pd.DataFrame()
-        df['Quantity'] = food_amounts
-        df['Units'] = food_units
-        df['Food'] = food_names
-        df.to_csv(filename, index=False)
-        return name
-    
-    @staticmethod
-    def from_file(filename, meal_dir=meal_dir):
-        """ Reads in a recipe from a file (no metadata attached) """
-        # Format recipe name
-        name = filename.replace("_", " ")[:-4]
-        name = " ".join([word.capitalize() for word in name.split(" ")])
-        # Read from file
-        data = pd.read_csv(meal_dir+filename)
-        foods = {}
-        for i,food_name in enumerate(data.Food):
-            foods[food_name.lower()] = data.Quantity[i]*units(data.Units[i])
-        return Meal(name=name, foods=foods)
-            
-
 ### Food class
 class Food:
-    ''' Recipe class '''
-    def __init__(self, name, category=None, special=None):
+    def __init__(self, name, category, special=None):
         self.name = name.lower()
         self.category = category
         self.special = special
@@ -187,161 +115,277 @@ class Food:
     
     def __str__(self):
         return f"{self.name}, category: {self.category}"
-        
-        
-class Diet:
-    ''' Diet class to keep track of all foods and meals '''
-    def __init__(self, meals=[], plan=food_file):
-        self.read_plan(plan)
-    
-    def read_plan(self, file=None):
-        if not file: return
-        self.plan = {
-            'allowed': [],
-            'banned': [],
-            'restricted': [], # <= 20% per week, (30% per day?)
-        }
-        for key in self.plan:
-            foods = pd.read_csv(file, usecols=[key], squeeze=True).dropna()
-            self.plan[key] = list(foods)
-    
-    def check_foods(self, foods):
-        """
-        Checks the dictionary of foods passed in for diet compliance
-        Returns whether the food is diet compliant, followed by the percentage of restricted foods
-        """
-        restricted_tally = 0 * measure_unit # common units
-        other_tally = 0 * measure_unit
-        allowed = True
-        for food_name in foods:
-            if food_name in self.plan['banned']:
-                allowed = False
-                restricted_tally += foods[food_name].to(measure_unit)
-            elif food_name in self.plan['restricted']:
-                restricted_tally += foods[food_name].to(measure_unit) # add amt to counter
-            else: # for now, just assume everything not listed is fine
-                other_tally += foods[food_name].to(measure_unit)
-        
-        # No restricted foods
-        if restricted_tally == 0:
-            return allowed, 0
-        
-        restricted_amt = (restricted_tally/(restricted_tally+other_tally)).magnitude
-        return restricted_amt <= 0.2, restricted_amt
-        
 
-### Contains variables and methods for meal planning
-class MealPlan:
+### Recipe class
+class Recipe:
     
-    def __init__(self, meals=[], recipes=[], diet=Diet()):
-        """ Initializes a weekly meal plan """
-        # Meals are scheduled, recipes are not
-        self.meals = meals
-        self.recipes = read_recipes()
-        self.diet = diet
-        self.meals.sort()
-        self.to_file()
-    
-    def update_recipes(self):
-        """ Updates the recipes with meals """
-        for meal in self.meals:
-            m = meal.copy()
-            m.date = None
-            if m not in self.recipes:
-                self.recipes.append(m)
-        self.to_file()
-    
-    def add_meal(self, meal):
-        """ Adds meals passed to a list """
-        # Check if single argument
-        if meal.date is None and meal not in self.recipes:
-                self.recipes.append(meal)
-                meal.to_file()
-        elif meal not in self.meals:
-            self.meals.append(meal)
-            self.meals.sort()
-        self.to_file()
-    
-    def update_meal(self, old_meal, new_meal):
-        """ Updates a meal entry """
-        self.remove_meal(old_meal)
-        self.add_meal(new_meal)
-        new_meal.to_file()
-        self.to_file()
-    
-    def remove_meal(self, meal):
-        """ Removes a meal from the index """
-        if meal.date is None:
-            if meal in self.recipes:
-                self.recipes.remove(meal)
-            os.remove(meal.filename())
-            while meal in self.meals:
-                self.meals.remove(meal)
-        else:
-            for m in self.meals:
-                if m.name==meal.name:
-                    self.remove_meal(m)
-        self.to_file()
-    
-    def get_meals(self, start=date.min, days=timedelta.max):
-        return filter_meals(self.meals, start, days)
-    
-    def check_diet(self, start=find_week_start(), days=7):
-        """ Checks a period of time for diet compliance """
-        # First, check the whole set
-        meals = filter_meals(self.meals, start, days)
-        week_foods = calc_foods(meals)
-        week_state = self.diet.check_foods(week_foods)
+    def __init__(self, filename, name="", servings=0, ingredients={}, instructions="", recipe_dir=saved_recipes):
+        """ Constructor for the Recipe class """
+        self.filename = recipe_dir+filename
+        self.name = name
+        self.ingredients = ingredients
+        self.instructions = instructions
+        self.servings = servings
+        self.percent = 0
+        self.accept = True
         
-        # Check individual meals here
-        for meal in meals:
-            meal.allowed, meal.percent = self.diet.check_foods(meal.foods)
-        return week_state
+        if os.path.exists(self.filename):
+            self.set_file()
+        else:
+            self.to_file()
     
-    def to_file(self, file=meal_plan):
-        """ Saves all meals to recipes and meal metadata in a separate file """
-        # Save all meals
-        data = [[meal.to_file(), meal.date, meal.category, meal.instructions, meal.feeds] for meal in self.meals]
-        data += [[recipe.to_file(), None, recipe.category, recipe.instructions, recipe.feeds] for recipe in self.recipes]
-        # Save plan as a csv
-        df = pd.DataFrame(data=data, columns=['file', 'date', 'category', 'instructions', 'feeds'])
-        df.to_csv(file, index=False)
+    def __str__(self):
+        return f"Recipe: {self.name}"
     
-    def get_recipes(self):
-        return self.recipes
+    def __eq__(self, other):
+        return self.filename == other.filename
+    
+    def __repr__(self):
+        return str(self)
+    
+    def __hash__(self):
+        return len(self.name) % 31 + len(self.ingredients) % 31 + self.servings*31 % 7
+    
+    def to_file(self):
+        """ Saves a Recipe object to file """
+        filestring = ""
+        # Loop through attributes
+        for var,label in recipe_labels.items():
+            filestring += label
+            attr = getattr(self, var)
+            
+            # Ingredients to csv format
+            if var=='ingredients':
+                df = dict_to_pandas(attr)
+                s = io.StringIO()
+                df.to_csv(s, index=False, header=False)
+                attr = s.getvalue()
+                attr = attr[:-1] # Take off extra \n
+            
+            filestring += str(attr)
+        
+        # Write file
+        f = open(self.filename, 'w')
+        f.write(filestring)
+        f.close()
+    
+    def set_file(self):
+        """ Sets a recipe's options to match a filename """
+        with open(self.filename, 'r') as f:
+            filestring = f.read()
+        
+        # Filter relevant values of file
+        regex = "("+"|".join(recipe_labels.values())+")"
+        file_list = re.split(regex, filestring)
+        file_list = list(filter(None, file_list)) # get rid of '' @ beginning
+        
+        # Process values
+        for var,label in recipe_labels.items():
+            # Get value of variable
+            if file_list.index(label)+1==len(file_list) or file_list[file_list.index(label)+1] in recipe_labels.values():
+                setattr(self, var, defaults[var])
+                continue
+            value = file_list[file_list.index(label)+1]
+            # Parse servings
+            if var=='servings':
+                value = float(value)
+                continue
+            # Parse ingredients
+            if var=='ingredients':
+                s = io.StringIO(value)
+                data = pd.read_csv(s, header=None, names=ingredient_columns)
+                value = {}
+                for i in range(len(data.food)):
+                    value[data.food[i].lower()] = data.quantity[i]*units(data.units[i])
+            
+            # Set class variable
+            setattr(self, var, value)
     
     @staticmethod
-    def from_file(file=meal_plan, meal_dir=meal_dir, read_all=True):
-        """ Reads in all previous meals from metadata """
-        if not os.path.exists(meal_plan):
-            return MealPlan()
-        meals = []
-        recipes = []
-        meal_data = pd.read_csv(file, na_filter=False)
-        # Process data
-        for i in range(len(meal_data)):
-            d = meal_data.iloc[i]
-            if d.date!='':
-                m_date = date.fromisoformat(d.date)
-            else:
-                m_date = None
-            
-            # Read in recipe
-            meal = Meal.from_file(d.file, meal_dir)
-            # Set other properties
-            meal.date = m_date
-            meal.category = d.category
-            meal.instructions = d.instructions
-            meal.feeds = d.feeds
-            
-            if m_date is None:
-                recipes.append(meal)
-            else:
-                meals.append(meal)
-            
-        if read_all:
-            recipes = read_recipes()
+    def from_file(filename):
+        """ Returns a new Recipe with options from filename """
+        r = Recipe(filename)
+        return r
         
-        return MealPlan(meals = meals, recipes=recipes)
+
+### Meal Class
+class Meal(Recipe):
+    
+    def __init__(self, filename, name="", m_date=date.today(), category="snack", servings=0, ingredients={},
+                 instructions="", recipe_dir=saved_recipes):
+        """ Initializes the Meal class """
+        if not os.path.exists(recipe_dir+filename):
+            raise ValueError(f"Recipe file not found: {filename}")
+        super().__init__(filename, name, servings, ingredients, instructions)
+        if type(m_date) is not date:
+            raise ValueError(f"Invalid date: {m_date}")
+        self.date = m_date
+        if category.lower() not in meal_categories:
+            raise ValueError(f"Invalid category: {category}")
+        self.category = category.lower()
+    
+    def __eq__(self, other):
+        return self.date==other.date and self.filename==other.filename and self.category==other.category
+    
+    def __lt__(self, other):
+        return self.date < other.date
+    
+    def __le__(self, other):
+        return self.date <= other.date
+    
+    def __str__(self):
+        return f"Meal: {self.name}, date: {self.date}, category: {self.category}"
+    
+    def recipe(self):
+        """ Returns the Recipe object corresponding to the meal """
+        file = os.path.basename(self.filename)
+        #return Recipe(file, self.name, self.servings, self.ingredients, self.instructions)
+        return super().from_file(file)
+    
+    def copy(self):
+        file = os.path.basename(self.filename)
+        return Meal(file, m_date=self.date, category=self.category)
+
+# Could theoretically have a separate meal file named for the recipe if there are edits?
+
+class MealPlan:
+    
+    def __init__(self, diet_file=saved_diet, meal_file=saved_meals, recipe_dir=saved_recipes):
+        """ Initializes a Meal Plan """
+        self.meals = []
+        self.recipes = []
+        self.diet = {}
         
+        self.diet_file = diet_file
+        self.meal_file = meal_file
+        self.recipe_dir = recipe_dir
         
+        self.update()
+    
+    def update(self):
+        """ Updates meals, recipes, and diet plan """
+        self.read_recipes()
+        self.read_meals()
+        self.read_diet()
+        self.check_recipes()
+    
+    def read_recipes(self):
+        """ Reads all recipes from a directory and returns a list of Meal objects  """
+        self.recipes = []
+        if not os.path.exists(self.recipe_dir):
+            os.mkdir(self.recipe_dir)
+        for file in glob.glob(self.recipe_dir+"*"):
+            file = os.path.basename(file)
+            self.recipes.append(Recipe.from_file(file))
+    
+    def read_meals(self):
+        """ Reads meals from saved meal file """
+        self.meals = []
+        if not os.path.exists(self.meal_file):
+            data = pd.DataFrame(columns=meal_columns)
+            data.to_csv(self.meal_file, index=False)
+        else:
+            data = pd.read_csv(self.meal_file)
+        for i in range(len(data)):
+            m_date = date.fromisoformat(data.date[i])
+            self.meals.append(Meal(data.filename[i], m_date=m_date, category=data.category[i]))
+    
+    def read_diet(self):
+        """ Reads in a diet plan from a file """
+        if not os.path.exists(self.diet_file):
+            data = pd.DataFrame(columns=diet_columns)
+            data.to_csv(self.diet_file, index=False)
+        else:
+            data = pd.read_csv(self.diet_file)
+            data = data.fillna('')
+        for col in data.columns:
+            self.diet[col] = [val for val in  data[col] if val!=""]
+    
+    def get_meals(self, start, days):
+        """ Gets all meals between start and start + # days """
+        td = timedelta(days=days)
+        if len(self.meals)==0:
+            return []
+        meals = np.array(self.meals)
+        file = os.path.basename(meals[0].filename)
+        meals = meals[meals>=Meal(file, m_date=start)]
+        meals = meals[meals<Meal(file, m_date=start+td)]
+        return list(meals)
+    
+    def add_meal(self, meal):
+        """ Adds a meal to the meal list """
+        if type(meal) is Meal and meal not in self.meals:
+            self.meals.append(meal)
+            r = meal.recipe()
+        self.to_file()
+        self.update()
+    
+    def remove_meal(self, meal):
+        """ Removes a meal from the meal list """
+        print("remove meal called")
+        if type(meal) is Meal and meal in self.meals:
+            self.meals.remove(meal)
+        elif type(meal) is Recipe and meal in self.recipes:
+            print("removing recipe:", meal.filename)
+            self.remove_recipe(meal)
+        self.to_file()
+        self.update()
+    
+    def update_meal(self, old_meal, new_meal):
+        """ Updates a meal in the meal list """
+        self.remove_meal(old_meal)
+        self.add_meal(new_meal)
+        self.to_file()
+        self.update()
+    
+    def remove_recipe(self, recipe):
+        """ Removes a recipe from the list (and the file tree) """
+        if recipe in self.recipes:
+            self.recipes.remove(recipe)
+            os.remove(recipe.filename)
+        for meal in self.meals:
+            print("comparing:", meal.filename, recipe.filename)
+            if meal.filename==recipe.filename:
+                self.remove_meal(meal)
+    
+    def add_food(self, food, category):
+        """ Adds a food to the diet """
+        self.diet[category].append(food)
+        self.to_file()
+    
+    def remove_food(self, food):
+        """ Removes a food from the diet """
+        for category in self.food_columns:
+            if food in self.diet[category]:
+                self.diet[category].remove(food)
+        self.to_file()
+    
+    def to_file(self):
+        """ Saves all meal info to a csv file """
+        # Recipes
+        for recipe in self.recipes:
+            recipe.to_file()
+        # Save Diet
+        diet = pd.DataFrame()
+        for key in self.diet:
+            df = pd.DataFrame(data=self.diet[key])
+            diet = pd.concat([diet,df], ignore_index=True, axis=1)
+        diet = diet.fillna('')
+        diet.columns = diet_columns
+        diet.to_csv(self.diet_file, index=False)
+        # Meals
+        data = [[os.path.basename(meal.filename), meal.date, meal.category] for meal in self.meals]
+        meals = pd.DataFrame(data=data, columns=meal_columns)
+        meals.to_csv(self.meal_file, index=False)
+    
+    def check_plan(self, start, days):
+        """ Checks the meal plan between start and start + days """
+        meals = self.get_meals(start, days)
+        foods = calc_foods(meals)
+        return check_foods(foods, self.diet)
+    
+    def check_recipes(self):
+        """ Checks recipes and meals and updates them with their percentages """
+        for recipe in self.meals+self.recipes:
+            foods = calc_foods([recipe])
+            recipe.accept, recipe.percent = check_foods(foods, self.diet)
