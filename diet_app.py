@@ -2,7 +2,7 @@ import sys
 import numpy as np
 from datetime import date, time, timedelta, datetime
 from PyQt5 import QtWidgets as qtw, QtGui as qtg, QtCore as qtc
-import diet_planner_2 as diet
+import diet_planner as diet
 import io
 import os
 
